@@ -1,0 +1,17 @@
+- type: replace
+  path: /azs/-
+  value:
+    name: ((env_name))
+    cpi: ((env_name))
+    cloud_properties:
+      availability_zone: ((az))
+
+- type: replace
+  path: /networks/name=private/subnets/-
+  value:
+    az: ((env_name))
+    range: ((internal_cidr))
+    gateway: ((internal_gw))
+    reserved: [((reserved_range))]
+    cloud_properties:
+      subnet: ((subnet_id))

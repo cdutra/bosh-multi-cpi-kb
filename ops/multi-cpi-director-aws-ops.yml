@@ -1,0 +1,14 @@
+# agents need to talk to the director
+- type: replace
+  path: /instance_groups/name=bosh/properties/agent/mbus
+  value: nats://nats:((nats_password))@((external_ip)):4222
+
+# agents need to talk to registry
+- type: replace
+  path: /instance_groups/name=bosh/properties/registry/address
+  value: ((external_ip))
+
+# agents need to talk to registry
+- type: replace
+  path: /instance_groups/name=bosh/properties/registry/host
+  value: ((external_ip))

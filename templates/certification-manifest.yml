@@ -1,0 +1,30 @@
+---
+name: multi-cpi
+
+releases:
+- name: certification
+  version: latest
+
+stemcells:
+- alias: default
+  name: bosh-aws-xen-hvm-ubuntu-trusty-go_agent
+  version: latest
+
+update:
+  canaries: 1
+  canary_watch_time: 30000-240000
+  update_watch_time: 30000-600000
+  max_in_flight: 3
+
+instance_groups:
+- name: simple
+  instances: 2
+  vm_type: default
+  stemcell: default
+  azs: []
+  networks:
+  - name: private
+    default: [dns, gateway]
+  jobs:
+  - name: simple
+    release: certification

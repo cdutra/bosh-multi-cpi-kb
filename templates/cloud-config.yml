@@ -1,0 +1,18 @@
+azs: []
+
+vm_types:
+- name: default
+  cloud_properties:
+    instance_type: t2.medium
+
+networks:
+- name: private
+  type: manual
+  subnets: []
+
+compilation:
+  workers: 1
+  reuse_compilation_vms: true
+  az: ((env_name))
+  vm_type: default
+  network: private
