@@ -52,7 +52,10 @@ function teardown_iaas {
 
 function setup_iaas {
   local env_file=$1
-  local vpc_cidr_block=$2 # e.g. 10.0.0.0/16
+  local vpc_network=$2
+  local vpc_network_bits=$3
+  local vpc_cidr_block=$vpc_network/$vpc_network_bits # e.g. 10.0.0.0/16
+  local vpn_network=$4
 
   source "${env_file}"
 
@@ -69,12 +72,26 @@ function setup_iaas {
   local terraform_output_metadata="${output_dir}/terraform-metadata-${ENV_NAME}.json"
   jq -e --raw-output \
     '.modules[0].outputs | map_values(.value)' \
-    "${ENV_NAME}.tfstate" > "${terraform_output_metadata}"
+    "${output_dir}/${ENV_NAME}.tfstate" > "${terraform_output_metadata}"
   echo "Terraform output metadata: ${terraform_output_metadata}"
+
+  # Deploy VPN server
+  bosh int templates/vpn2.yml \
+    -l "${terraform_output_metadata}" \
+    -v lan_network_mask="255.255.0.0" \
+    -v lan_network_mask_bits="$vpc_network_bits" \
+    -v lan_network="$vpc_network" \
+    -v vpn_network_mask="255.255.0.0" \
+    -v vpn_network_mask_bits="$vpc_network_bits" \
+    -v vpn_network="$vpn_network" \
+    -v "access_key_id=${AWS_ACCESS_KEY}" \
+    -v "secret_access_key=${AWS_SECRET_KEY}" \
+    -l "${output_dir}/key.yml" \
+    --vars-store="$output_dir/vpn-creds.yml" > "$output_dir/vpn-$ENV_NAME.yml"
 
   # Generate CPI Config ops file
   local cpi_config_ops_file="${output_dir}/cpi-config-ops-${ENV_NAME}.yml"
-  bosh2 int \
+  bosh int \
     -l "${terraform_output_metadata}" \
     -v "access_key_id=${AWS_ACCESS_KEY}" \
     -v "secret_access_key=${AWS_SECRET_KEY}" \
@@ -84,13 +101,14 @@ function setup_iaas {
 
   # Generate Cloud Config ops file
   local cloud_config_ops_file="${output_dir}/cloud-config-ops-${ENV_NAME}.yml"
-  bosh2 int \
+  bosh int \
     -l "${terraform_output_metadata}" \
     -v "env_name=${ENV_NAME}" \
     ops/cloud-config-ops.yml > "${cloud_config_ops_file}"
 
+  # Generate deployment manifest ops file
   local manifest_ops_file="${output_dir}/manifest-ops-${ENV_NAME}.yml"
-  bosh2 int -v "env_name=${ENV_NAME}" ops/manifest-ops.yml > "${manifest_ops_file}"
+  bosh int -v "env_name=${ENV_NAME}" ops/manifest-ops.yml > "${manifest_ops_file}"
   echo "Generated deployment manifest ops file for '${ENV_NAME}'."
 }
 
@@ -100,7 +118,7 @@ function delete_director {
 
   local terraform_output_metadata="${output_dir}/terraform-metadata-${ENV_NAME}.json"
 
-  bosh2 -n delete-env \
+  bosh -n delete-env \
     -o ~/workspace/bosh-deployment/aws/cpi.yml \
     -o ~/workspace/bosh-deployment/jumpbox-user.yml \
     -o ~/workspace/bosh-deployment/external-ip-with-registry-not-recommended.yml \
@@ -122,7 +140,7 @@ function deploy_director {
 
   local terraform_output_metadata="${output_dir}/terraform-metadata-${ENV_NAME}.json"
 
-  bosh2 -n create-env \
+  bosh -n create-env \
     -o ~/workspace/bosh-deployment/aws/cpi.yml \
     -o ~/workspace/bosh-deployment/jumpbox-user.yml \
     -o ~/workspace/bosh-deployment/external-ip-with-registry-not-recommended.yml \
@@ -137,8 +155,8 @@ function deploy_director {
 
   export BOSH_ENVIRONMENT="$( jq -e --raw-output .external_ip "${terraform_output_metadata}" )"
   export BOSH_CLIENT=admin
-  export BOSH_CLIENT_SECRET=$( bosh2 int ${output_dir}/creds.yml --path /admin_password )
-  export BOSH_CA_CERT=$( bosh2 int ${output_dir}/creds.yml --path /director_ssl/ca )
+  export BOSH_CLIENT_SECRET=$( bosh int ${output_dir}/creds.yml --path /admin_password )
+  export BOSH_CA_CERT=$( bosh int ${output_dir}/creds.yml --path /director_ssl/ca )
 }
 
 function deployment {
@@ -157,22 +175,23 @@ function deployment {
   local az2_cloud_config="${output_dir}/cloud-config-ops-${ENV_NAME}.yml"
   local az2_manifest_ops="${output_dir}/manifest-ops-${ENV_NAME}.yml"
 
-  bosh2 -n update-cpi-config <( bosh2 int -o "${az1_ops}" -o "${az2_ops}" templates/cpi-config.yml )
+  bosh -n update-cpi-config <( bosh int -o "${az1_ops}" -o "${az2_ops}" templates/cpi-config.yml )
 
-  bosh2 -n update-cloud-config \
+  bosh -n update-cloud-config \
     -o "${az1_cloud_config}" \
     -o "${az2_cloud_config}" \
     -v "env_name=${ENV_NAME}" \
     templates/cloud-config.yml
 
-  bosh2 -n upload-stemcell "${stemcell_path}"
+  bosh -n upload-stemcell "${stemcell_path}"
 
+  current_dir=$PWD
   pushd ~/workspace/bosh-cpi-certification/shared/assets/certification-release
-    bosh2 -n create-release --name certification --tarball ${output_dir}/certification-release.tgz --force
+    bosh -n create-release --name certification --tarball $current_dir/$output_dir/certification-release.tgz --force
   popd
-  bosh2 -n upload-release ${output_dir}/certification-release.tgz
+  bosh -n upload-release ${output_dir}/certification-release.tgz
 
-  bosh2 deploy -n -d multi-cpi -o "${az1_manifest_ops}" -o "${az2_manifest_ops}" templates/certification-manifest.yml
+  bosh deploy -n -d multi-cpi -o "${az1_manifest_ops}" -o "${az2_manifest_ops}" templates/certification-manifest.yml
 }
 
 set -e
@@ -193,11 +212,11 @@ if [[ -n "${destroy}" ]]; then
 
     export BOSH_ENVIRONMENT="$( jq -e --raw-output .external_ip "${terraform_output_metadata}" )"
     export BOSH_CLIENT=admin
-    export BOSH_CLIENT_SECRET=$( bosh2 int ${output_dir}/creds.yml --path /admin_password )
-    export BOSH_CA_CERT=$( bosh2 int ${output_dir}/creds.yml --path /director_ssl/ca )
+    export BOSH_CLIENT_SECRET=$( bosh int ${output_dir}/creds.yml --path /admin_password )
+    export BOSH_CA_CERT=$( bosh int ${output_dir}/creds.yml --path /director_ssl/ca )
 
-    bosh2 -n -d multi-cpi delete-deployment
-    bosh2 -n clean-up --all
+    bosh -n -d multi-cpi delete-deployment
+    bosh -n clean-up --all
 
     delete_director "${output_dir}/${AZ_1}.env"
   fi
@@ -220,10 +239,19 @@ generate_az_env_file \
   "${AZ_2}" us-west-1
 
 # create multi cpi AZ 1 (contains bosh director)
-setup_iaas "${output_dir}/${AZ_1}.env" "10.0.0.0/16"
+setup_iaas "${output_dir}/${AZ_1}.env" "10.0.0.0" "16" "192.168.0.0"
 
 # create multi cpi AZ 2
-setup_iaas "${output_dir}/${AZ_2}.env" "10.1.0.0/16"
+setup_iaas "${output_dir}/${AZ_2}.env" "10.1.0.0" "16" "192.169.0.0"
+
+bosh create-env \
+  --vars-store="$output_dir/vpn-creds.yml" \
+  -v remote_vpn_ip="$( bosh int ${output_dir}/terraform-metadata-$AZ_2.json --path /vpn_external_ip )" \
+  "$output_dir/vpn-$AZ_1.yml"
+  bosh create-env \
+    --vars-store="$output_dir/vpn-creds.yml" \
+    -v remote_vpn_ip="$( bosh int ${output_dir}/terraform-metadata-$AZ_1.json --path /vpn_external_ip )" \
+    "$output_dir/vpn-$AZ_2.yml"
 
 # deploy director to AZ 1
 deploy_director "${output_dir}/${AZ_1}.env"

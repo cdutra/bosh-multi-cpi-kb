@@ -162,3 +162,14 @@ resource "aws_eip" "director" {
 output "external_ip" {
   value = "${aws_eip.director.public_ip}"
 }
+
+# only if using vpn
+output "vpn_internal_ip" {
+  value = "${cidrhost(aws_vpc.default.cidr_block, 7)}"
+}
+resource "aws_eip" "vpn" {
+  vpc = true
+}
+output "vpn_external_ip" {
+  value = "${aws_eip.vpn.public_ip}"
+}
