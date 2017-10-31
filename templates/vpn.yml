@@ -21,40 +21,15 @@ cloud_provider:
   template:
     name: aws_cpi
     release: bosh-aws-cpi
+
+name: openvpn
+
 instance_groups:
 - instances: 1
   jobs:
   - name: openvpn-clients
     properties:
-      configs:
-        - |
-          client
-          group nogroup
-          user nobody
-          persist-key
-          persist-tun
-          verb 3
-          mute 20
-          mute-replay-warnings
-          nobind
-          resolv-retry infinite
-          remote-random
-          remote-cert-tls server
-          remote ((remote_vpn_ip)) 1194 tcp
-          cipher AES-256-CBC
-          keysize 256
-          tls-client
-          tls-cipher DEFAULT:!EXP:!LOW:!MEDIUM
-          tls-version-min 1.2
-          <ca>
-          ((client_key_pair.ca))
-          </ca>
-          <cert>
-          ((client_key_pair.certificate))
-          </cert>
-          <key>
-          ((client_key_pair.private_key))
-          </key>
+      clients: []
     release: openvpn
   - name: openvpn
     properties:
@@ -78,13 +53,11 @@ instance_groups:
   - name: iptables
     properties:
       iptables:
-        filter:
-          FORWARD:
-          - -s ((vpn_network))/((vpn_network_mask_bits)) -d ((lan_network))/((lan_network_mask_bits))
-            -m conntrack --ctstate NEW -j ACCEPT -m comment --comment 'vpn -> lan'
-          - -s ((lan_network))/((lan_network_mask_bits)) -d ((vpn_network))/((vpn_network_mask_bits))
-            -m conntrack --ctstate NEW -j ACCEPT -m comment --comment 'lan -> vpn'
-          - -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+        nat:
+          POSTROUTING:
+            # server
+            - -s ((vpn_network))/((vpn_network_mask_bits)) -d ((lan_network))/((lan_network_mask_bits))
+              -j MASQUERADE -m comment --comment "vpn -> lan"
     release: networking
   name: openvpn
   networks:
@@ -99,7 +72,7 @@ instance_groups:
     - ((vpn_external_ip))
   resource_pool: default
   stemcell: default
-name: openvpn
+
 networks:
 - name: default
   subnets:
@@ -116,23 +89,24 @@ networks:
   static_ips:
   - ((vpn_external_ip))
   type: vip
+
 releases:
 - name: openvpn
-  url: file:///tmp/vpn.tgz
-  # sha1: 19e79e45b690bc933b0ff5d9e54574f25d0899b9
-  # url: https://s3-external-1.amazonaws.com/dpb587-bosh-release-openvpn-us-east-1/compiled_releases/openvpn/openvpn-4.0.0-on-ubuntu-trusty-stemcell-3421.11-compiled-1.20170630134749.0.tgz
+  sha1: 3ddea18dcf1710fd8034a7f073410e8cf5e82fb7
+  url: https://s3-external-1.amazonaws.com/dpb587-bosh-release-openvpn-us-east-1/compiled_releases/openvpn/openvpn-4.1.0-on-ubuntu-trusty-stemcell-3468-compiled-1.20171017141355.0.tgz
 - name: os-conf
   sha1: 651f10a765a2900a7f69ea07705f3367bd8041eb
   url: https://bosh.io/d/github.com/cloudfoundry/os-conf-release?v=11
   version: 11
 - name: bosh-aws-cpi
-  sha1: 26b3a5c43e6f82594a373309a495660d6db26254
-  url: https://bosh.io/d/github.com/cloudfoundry-incubator/bosh-aws-cpi-release?v=65
-  version: 65
+  sha1: cfcbc98affa9cad674087ab6b8bd4b1188b18439
+  url: https://bosh.io/d/github.com/cloudfoundry-incubator/bosh-aws-cpi-release?v=67
+  version: 67
 - name: networking
   sha1: 9b5f9d27917c3754e492470ac6c9af80d62963db
   url: http://bosh.io/d/github.com/cloudfoundry/networking-release?v=9
   version: 9
+
 resource_pools:
 - cloud_properties:
     availability_zone: ((az))
@@ -145,15 +119,17 @@ resource_pools:
   name: default
   network: default
   stemcell:
-    sha1: 98f9b71398f0f771e8a4bbaf5531440b99bae540
-    url: https://bosh.io/d/stemcells/bosh-aws-xen-hvm-ubuntu-trusty-go_agent?v=3421.11
+    sha1: 72d0532ef6eb8e7c29283eaf147c7084bc10a4d8
+    url: https://bosh.io/d/stemcells/bosh-aws-xen-hvm-ubuntu-trusty-go_agent?v=3468
+
 update:
   canaries: 1
   canary_watch_time: 1000-60000
   max_in_flight: 1
   update_watch_time: 1000-60000
+
 variables:
-- name: ca
+- name: mbus_ca
   type: certificate
   options:
     is_ca: true
@@ -163,28 +139,10 @@ variables:
 - name: mbus_cert
   type: certificate
   options:
-    ca: ca
+    ca: mbus_ca
     alternative_names:
     - ((vpn_internal_ip))
     - ((vpn_external_ip))
     common_name: ((vpn_external_ip))
-- name: server_key_pair
-  type: certificate
-  options:
-    ca: ca
-    common_name: openvpn
-    alternative_names:
-    - ((vpn_external_ip))
-    extended_key_usage:
-    - server_auth
-  type: certificate
-- name: client_key_pair
-  type: certificate
-  options:
-    ca: ca
-    common_name: openvpn-client
-    extended_key_usage:
-    - client_auth
-  type: certificate
-- name: ssh_tunnel
+- name: jumpbox_ssh
   type: ssh

@@ -15,7 +15,7 @@ data "aws_availability_zones" "available" {}
 
 # Create a VPC to launch our instances into
 resource "aws_vpc" "default" {
-  assign_generated_ipv6_cidr_block = true
+  # assign_generated_ipv6_cidr_block = true
   cidr_block = "${var.vpc_cidr_block}"
   tags {
     Name = "${var.env_name}"
@@ -49,17 +49,14 @@ resource "aws_route_table_association" "a" {
 
 resource "aws_subnet" "default" {
   vpc_id = "${aws_vpc.default.id}"
-  cidr_block = "${cidrsubnet(aws_vpc.default.cidr_block, 8, 0)}"
-  ipv6_cidr_block = "${cidrsubnet(aws_vpc.default.ipv6_cidr_block, 8, 1)}"
+  cidr_block = "${aws_vpc.default.cidr_block}"
+  # ipv6_cidr_block = "${aws_vpc.default.ipv6_cidr_block}"
   depends_on = ["aws_internet_gateway.default"]
   availability_zone = "${data.aws_availability_zones.available.names[0]}"
 
   tags {
     Name = "${var.env_name}"
   }
-
-  # vms should not have public ip (security)
-  map_public_ip_on_launch = true
 }
 
 # have better network acl to only allow internal communication
@@ -172,4 +169,7 @@ resource "aws_eip" "vpn" {
 }
 output "vpn_external_ip" {
   value = "${aws_eip.vpn.public_ip}"
+}
+output "route_table_id" {
+  value = "${aws_route_table.default.id}"
 }

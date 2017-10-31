@@ -1,0 +1,19 @@
+- path: /releases/-
+  type: replace
+  value:
+    name: networking
+    sha1: 9b5f9d27917c3754e492470ac6c9af80d62963db
+    url: http://bosh.io/d/github.com/cloudfoundry/networking-release?v=9
+    version: 9
+
+- path: /instance_groups/name=openvpn/jobs/-
+  type: replace
+  value:
+    name: iptables
+    release: networking
+    properties:
+      iptables:
+        nat:
+          POSTROUTING:
+          - -s ((vpn_network))/((vpn_network_mask_bits)) -d ((lan_network))/((lan_network_mask_bits))
+            -j MASQUERADE -m comment --comment "vpn -> lan"

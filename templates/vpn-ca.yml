@@ -1,0 +1,22 @@
+variables:
+- name: ca
+  type: certificate
+  options:
+    is_ca: true
+    common_name: ca
+- name: server_key_pair
+  type: certificate
+  options:
+    ca: ca
+    common_name: openvpn
+    alternative_names:
+    - ((wan_ip))
+    extended_key_usage:
+    - server_auth
+- name: client_key_pair
+  type: certificate
+  options:
+    ca: ca
+    common_name: openvpn-client
+    extended_key_usage:
+    - client_auth

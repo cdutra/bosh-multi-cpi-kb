@@ -1,0 +1,9 @@
+- path: /resource_pools/0/cloud_properties/advertised_routes?/-
+  type: replace
+  value:
+    table_id: ((route_table_id))
+    destination: ((remote_network_cidr_block))
+
+- path: /instance_groups/name=openvpn/jobs/name=iptables/properties/iptables/nat/POSTROUTING/-
+  type: replace
+  value: -d ((remote_network_cidr_block)) -j MASQUERADE -m comment --comment "local -> remote"

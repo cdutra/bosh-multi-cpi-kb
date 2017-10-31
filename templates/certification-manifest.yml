@@ -4,6 +4,8 @@ name: multi-cpi
 releases:
 - name: certification
   version: latest
+- name: os-conf
+  version: latest
 
 stemcells:
 - alias: default
@@ -28,3 +30,9 @@ instance_groups:
   jobs:
   - name: simple
     release: certification
+  - name: user_add
+    release: os-conf
+    properties:
+      users:
+      - name: jumpbox
+        public_key: ((jumpbox_ssh.public_key))

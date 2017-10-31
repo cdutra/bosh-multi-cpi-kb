@@ -1,0 +1,50 @@
+# client_key_pair nad remote_vpn_ip (vpn_external_ip)
+- path: /instance_groups/name=openvpn/jobs/name=openvpn-clients?/properties?/clients?/-
+  type: replace
+  value:
+    name: client-1
+    config: |
+      client
+      group nogroup
+      user nobody
+      persist-key
+      persist-tun
+      verb 3
+      mute 20
+      mute-replay-warnings
+      nobind
+      resolv-retry infinite
+      remote-random
+      remote-cert-tls server
+      remote ((remote_vpn_ip)) 1194 tcp
+      cipher AES-256-CBC
+      keysize 256
+      tls-client
+      tls-cipher DEFAULT:!EXP:!LOW:!MEDIUM
+      tls-version-min 1.2
+      <ca>
+      ((client_key_pair.ca))
+      </ca>
+      <cert>
+      ((client_key_pair.certificate))
+      </cert>
+      <key>
+      ((client_key_pair.private_key))
+      </key>
+
+- path: /instance_groups/name=openvpn/jobs/name=openvpn-clients?/release?
+  type: replace
+  value: openvpn
+
+# remote_network_cidr_block (10.1.0.0/16)
+- path: /instance_groups/name=openvpn/jobs/name=iptables/properties/iptables/nat/POSTROUTING/-
+  type: replace
+  value: -d ((remote_network_cidr_block)) -j MASQUERADE -m comment --comment "local -> remote"
+
+
+# route_table_id and remote_network_cidr_block (10.1.0.0/16)
+- path: /resource_pools/0/cloud_properties/advertised_routes?/-
+  type: replace
+  value:
+    table_id: ((route_table_id))
+    destination: ((remote_network_cidr_block))

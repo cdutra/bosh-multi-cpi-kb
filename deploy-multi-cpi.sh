@@ -34,7 +34,7 @@ EOF
 
 function teardown_iaas {
   local env_file=$1
-  local vpc_cidr_block=$2 # e.g. 10.0.0.0/16
+  local vpc_cidr_block=$2 # e.g. 10.0.0.0/24
 
   source "${env_file}"
 
@@ -54,8 +54,7 @@ function setup_iaas {
   local env_file=$1
   local vpc_network=$2
   local vpc_network_bits=$3
-  local vpc_cidr_block=$vpc_network/$vpc_network_bits # e.g. 10.0.0.0/16
-  local vpn_network=$4
+  local vpc_cidr_block=$vpc_network/$vpc_network_bits # e.g. 10.0.0.0/24
 
   source "${env_file}"
 
@@ -74,20 +73,6 @@ function setup_iaas {
     '.modules[0].outputs | map_values(.value)' \
     "${output_dir}/${ENV_NAME}.tfstate" > "${terraform_output_metadata}"
   echo "Terraform output metadata: ${terraform_output_metadata}"
-
-  # Deploy VPN server
-  bosh int templates/vpn2.yml \
-    -l "${terraform_output_metadata}" \
-    -v lan_network_mask="255.255.0.0" \
-    -v lan_network_mask_bits="$vpc_network_bits" \
-    -v lan_network="$vpc_network" \
-    -v vpn_network_mask="255.255.0.0" \
-    -v vpn_network_mask_bits="$vpc_network_bits" \
-    -v vpn_network="$vpn_network" \
-    -v "access_key_id=${AWS_ACCESS_KEY}" \
-    -v "secret_access_key=${AWS_SECRET_KEY}" \
-    -l "${output_dir}/key.yml" \
-    --vars-store="$output_dir/vpn-creds.yml" > "$output_dir/vpn-$ENV_NAME.yml"
 
   # Generate CPI Config ops file
   local cpi_config_ops_file="${output_dir}/cpi-config-ops-${ENV_NAME}.yml"
@@ -112,6 +97,39 @@ function setup_iaas {
   echo "Generated deployment manifest ops file for '${ENV_NAME}'."
 }
 
+function setup_vpn {
+  local env_file=$1
+  local vpc_network=$2
+  local vpc_network_bits=$3
+  local vpc_cidr_block=$vpc_network/$vpc_network_bits # e.g. 10.0.0.0/24
+  local vpn_network=$4
+  local remote_network_cidr_block=$5
+
+  source "${env_file}"
+
+  local terraform_output_metadata="${output_dir}/terraform-metadata-${ENV_NAME}.json"
+
+  cat $terraform_output_metadata
+
+  # Deploy VPN server
+  bosh int templates/vpn.yml \
+    -o templates/remote-vpn-ops.yml \
+    -l "${output_dir}/vpn-ca.yml" \
+    -l "${terraform_output_metadata}" \
+    -v lan_network_mask="255.255.255.0" \
+    -v lan_network_mask_bits="$vpc_network_bits" \
+    -v lan_network="$vpc_network" \
+    -v vpn_network_mask="255.255.255.0" \
+    -v vpn_network_mask_bits="$vpc_network_bits" \
+    -v vpn_network="$vpn_network" \
+    -v vpc_cidr_block="${vpc_cidr_block}" \
+    -v remote_network_cidr_block="$remote_network_cidr_block" \
+    -v "access_key_id=${AWS_ACCESS_KEY}" \
+    -v "secret_access_key=${AWS_SECRET_KEY}" \
+    -v private_key="key" \
+    --vars-store="$output_dir/vpn-creds-$ENV_NAME.yml" > "$output_dir/vpn-$ENV_NAME.yml"
+}
+
 function delete_director {
   local env_file=$1
   source "${env_file}"
@@ -123,7 +141,7 @@ function delete_director {
     -o ~/workspace/bosh-deployment/jumpbox-user.yml \
     -o ~/workspace/bosh-deployment/external-ip-with-registry-not-recommended.yml \
     -o ops/multi-cpi-director-aws-ops.yml \
-    -l "${output_dir}/key.yml" \
+    -v private_key="key" \
     -l "${terraform_output_metadata}" \
     -v "access_key_id=${AWS_ACCESS_KEY}" \
     -v "secret_access_key=${AWS_SECRET_KEY}" \
@@ -140,18 +158,20 @@ function deploy_director {
 
   local terraform_output_metadata="${output_dir}/terraform-metadata-${ENV_NAME}.json"
 
-  bosh -n create-env \
+  bosh -n int \
     -o ~/workspace/bosh-deployment/aws/cpi.yml \
     -o ~/workspace/bosh-deployment/jumpbox-user.yml \
     -o ~/workspace/bosh-deployment/external-ip-with-registry-not-recommended.yml \
     -o ops/multi-cpi-director-aws-ops.yml \
-    -l "${output_dir}/key.yml" \
+    -v private_key="key" \
     -l "${terraform_output_metadata}" \
     -v "access_key_id=${AWS_ACCESS_KEY}" \
     -v "secret_access_key=${AWS_SECRET_KEY}" \
     -v director_name="multi-cpi-bosh" \
     --vars-store "${output_dir}/creds.yml" \
-    ~/workspace/bosh-deployment/bosh.yml
+    ~/workspace/bosh-deployment/bosh.yml > "$output_dir/director.yml"
+
+  bosh -n create-env "$output_dir/director.yml"
 
   export BOSH_ENVIRONMENT="$( jq -e --raw-output .external_ip "${terraform_output_metadata}" )"
   export BOSH_CLIENT=admin
@@ -187,11 +207,15 @@ function deployment {
 
   current_dir=$PWD
   pushd ~/workspace/bosh-cpi-certification/shared/assets/certification-release
-    bosh -n create-release --name certification --tarball $current_dir/$output_dir/certification-release.tgz --force
+    # bosh -n create-release --name certification --version 0+dev.3 --tarball $current_dir/$output_dir/certification-release.tgz
   popd
   bosh -n upload-release ${output_dir}/certification-release.tgz
 
-  bosh deploy -n -d multi-cpi -o "${az1_manifest_ops}" -o "${az2_manifest_ops}" templates/certification-manifest.yml
+  bosh deploy -n -d multi-cpi \
+    -o "${az1_manifest_ops}" \
+    -o "${az2_manifest_ops}" \
+    -l "$output_dir/creds.yml" \
+    templates/certification-manifest.yml
 }
 
 set -e
@@ -204,7 +228,8 @@ destroy=$2
 : ${AZ_2:="multi-cpi-az2"}
 
 if [[ -n "${destroy}" ]]; then
-  [[ -d "${output_dir}" ]] || echo "Environment does NOT exist!" && exit 0
+
+  # [[ -d "${output_dir}" ]] || echo "Environment does NOT exist!" && exit 0
 
   if [[ ! -f "${output_dir}/director-deleted" ]]; then
     source "${output_dir}/${AZ_1}.env"
@@ -214,6 +239,9 @@ if [[ -n "${destroy}" ]]; then
     export BOSH_CLIENT=admin
     export BOSH_CLIENT_SECRET=$( bosh int ${output_dir}/creds.yml --path /admin_password )
     export BOSH_CA_CERT=$( bosh int ${output_dir}/creds.yml --path /director_ssl/ca )
+    export BOSH_GW_HOST=$BOSH_ENVIRONMENT
+    export BOSH_GW_USER=jumpbox
+    export BOSH_GW_PRIVATE_KEY=/tmp/jumpbox-private-key
 
     bosh -n -d multi-cpi delete-deployment
     bosh -n clean-up --all
@@ -221,8 +249,17 @@ if [[ -n "${destroy}" ]]; then
     delete_director "${output_dir}/${AZ_1}.env"
   fi
 
-  teardown_iaas "${output_dir}/${AZ_1}.env" "10.0.0.0/16"
-  teardown_iaas "${output_dir}/${AZ_2}.env" "10.1.0.0/16"
+  bosh delete-env \
+    --vars-store="$output_dir/vpn-creds-$AZ_1.yml" \
+    -v remote_vpn_ip="$( bosh int ${output_dir}/terraform-metadata-$AZ_2.json --path /vpn_external_ip )" \
+    "$output_dir/vpn-$AZ_1.yml"
+  bosh delete-env \
+    --vars-store="$output_dir/vpn-creds-$AZ_2.yml" \
+    -v remote_vpn_ip="$( bosh int ${output_dir}/terraform-metadata-$AZ_1.json --path /vpn_external_ip )" \
+    "$output_dir/vpn-$AZ_2.yml"
+
+  teardown_iaas "${output_dir}/${AZ_1}.env" "10.0.0.0/24"
+  teardown_iaas "${output_dir}/${AZ_2}.env" "10.0.1.0/24"
 
   rm -rf ${output_dir}
   exit 0
@@ -236,28 +273,35 @@ generate_az_env_file \
   "${AWS_ACCESS_KEY}" \
   "${AWS_SECRET_KEY}" \
   "${AZ_1}" us-east-1 \
-  "${AZ_2}" us-west-1
+  "${AZ_2}" us-east-1
 
 # create multi cpi AZ 1 (contains bosh director)
-setup_iaas "${output_dir}/${AZ_1}.env" "10.0.0.0" "16" "192.168.0.0"
-
+setup_iaas "${output_dir}/${AZ_1}.env" "10.0.0.0" "24"
 # create multi cpi AZ 2
-setup_iaas "${output_dir}/${AZ_2}.env" "10.1.0.0" "16" "192.169.0.0"
+setup_iaas "${output_dir}/${AZ_2}.env" "10.0.1.0" "24"
+
+bosh int templates/vpn-ca.yml \
+  -v vpn_external_ip_az1="$( bosh int ${output_dir}/terraform-metadata-$AZ_1.json --path /vpn_external_ip )" \
+  -v vpn_external_ip_az2="$( bosh int ${output_dir}/terraform-metadata-$AZ_2.json --path /vpn_external_ip )" \
+  --vars-store="$output_dir/vpn-ca.yml"
+
+setup_vpn "${output_dir}/${AZ_1}.env" "10.0.0.0" "24" "192.168.0.0" "10.0.1.0/24"
+setup_vpn "${output_dir}/${AZ_2}.env" "10.0.1.0" "24" "192.169.0.0" "10.0.0.0/24"
 
 bosh create-env \
-  --vars-store="$output_dir/vpn-creds.yml" \
+  --vars-store="$output_dir/vpn-creds-$AZ_1.yml" \
   -v remote_vpn_ip="$( bosh int ${output_dir}/terraform-metadata-$AZ_2.json --path /vpn_external_ip )" \
   "$output_dir/vpn-$AZ_1.yml"
-  bosh create-env \
-    --vars-store="$output_dir/vpn-creds.yml" \
-    -v remote_vpn_ip="$( bosh int ${output_dir}/terraform-metadata-$AZ_1.json --path /vpn_external_ip )" \
-    "$output_dir/vpn-$AZ_2.yml"
+bosh create-env \
+  --vars-store="$output_dir/vpn-creds-$AZ_2.yml" \
+  -v remote_vpn_ip="$( bosh int ${output_dir}/terraform-metadata-$AZ_1.json --path /vpn_external_ip )" \
+  "$output_dir/vpn-$AZ_2.yml"
 
 # deploy director to AZ 1
 deploy_director "${output_dir}/${AZ_1}.env"
 
 # deploy dummy deployment
-deployment \
-  "${output_dir}/${AZ_1}.env" \
-  "${output_dir}/${AZ_2}.env" \
-  "https://s3.amazonaws.com/bosh-aws-light-stemcells/light-bosh-stemcell-3421.11-aws-xen-hvm-ubuntu-trusty-go_agent.tgz"
+# deployment \
+#   "${output_dir}/${AZ_1}.env" \
+#   "${output_dir}/${AZ_2}.env" \
+#   "https://s3.amazonaws.com/bosh-aws-light-stemcells/light-bosh-stemcell-3421.11-aws-xen-hvm-ubuntu-trusty-go_agent.tgz"
